@@ -84,6 +84,41 @@ function updateReaction(postId, delta) {
   return false;
 }
 
+function updatePost(postId, updates) {
+  const files = listDataFiles();
+  for (const file of files) {
+    const filePath = path.join(DATA_DIR, file);
+    const arr = JSON.parse(fs.readFileSync(filePath, 'utf8') || '[]');
+    let changed = false;
+    const newArr = arr.map(p => {
+      if (p.id === postId) {
+        p = { ...p, ...updates };
+        changed = true;
+      }
+      return p;
+    });
+    if (changed) {
+      fs.writeFileSync(filePath, JSON.stringify(newArr, null, 2));
+      return true;
+    }
+  }
+  return false;
+}
+
+function deletePost(postId) {
+  const files = listDataFiles();
+  for (const file of files) {
+    const filePath = path.join(DATA_DIR, file);
+    const arr = JSON.parse(fs.readFileSync(filePath, 'utf8') || '[]');
+    const newArr = arr.filter(p => p.id !== postId);
+    if (newArr.length !== arr.length) {
+      fs.writeFileSync(filePath, JSON.stringify(newArr, null, 2));
+      return true;
+    }
+  }
+  return false;
+}
+
 const http = require('http');
 const server = http.createServer();
 const app = express();
@@ -116,6 +151,27 @@ app.post('/api/posts', (req, res) => {
   // emit to connected clients
   io.emit('new_post', post);
   res.status(201).json({ ok: true, file });
+});
+
+// PATCH /api/posts/:id - update post (e.g., hidden flag)
+app.patch('/api/posts/:id', (req, res) => {
+  const postId = req.params.id;
+  const updates = req.body || {};
+  const ok = updatePost(postId, updates);
+  if (!ok) return res.status(404).json({ error: 'post not found' });
+  const all = readAllPosts();
+  const updated = all.find(p => p.id === postId);
+  if (updated) io.emit('post_updated', updated);
+  res.json({ ok: true, post: updated });
+});
+
+// DELETE /api/posts/:id - delete a post
+app.delete('/api/posts/:id', (req, res) => {
+  const postId = req.params.id;
+  const ok = deletePost(postId);
+  if (!ok) return res.status(404).json({ error: 'post not found' });
+  io.emit('post_deleted', { id: postId });
+  res.json({ ok: true });
 });
 
 // POST /api/posts/:id/reaction - adjust reaction (+1 or -1)

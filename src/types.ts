@@ -3,4 +3,5 @@ export interface GratitudePost {
   content: string;
   createdAt: string;
   reactions: number;
+  hidden?: boolean;
 }

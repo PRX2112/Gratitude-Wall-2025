@@ -4,6 +4,7 @@ import { Heart, Sparkles, TrendingUp } from 'lucide-react';
 import GratitudeForm from './components/GratitudeForm';
 import GratitudeCard from './components/GratitudeCard';
 import TopPostsRecap from './components/TopPostsRecap';
+import AdminPanel from './components/AdminPanel';
 import { GratitudePost } from './types';
 
 function App() {
@@ -12,6 +13,7 @@ function App() {
   const [userReactions, setUserReactions] = useState<Set<string>>(new Set());
   const API_BASE = 'http://localhost:4000/api';
   const SOCKET_URL = 'http://localhost:4000';
+  const [showAdmin, setShowAdmin] = useState(false);
 
   useEffect(() => {
     // Try to fetch from server API first. If it fails, fallback to localStorage.
@@ -128,6 +130,31 @@ function App() {
     }
   };
 
+  const handleHideToggle = async (postId: string, hide: boolean) => {
+    try {
+      const res = await fetch(`${API_BASE}/posts/${postId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hidden: hide })
+      });
+      if (!res.ok) throw new Error('failed');
+      const data = await res.json();
+      setPosts(current => current.map(p => p.id === postId ? { ...p, hidden: data.post.hidden } : p));
+    } catch (e) {
+      console.warn('Failed to toggle hide', e);
+    }
+  };
+
+  const handleDelete = async (postId: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/posts/${postId}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('delete failed');
+      setPosts(current => current.filter(p => p.id !== postId));
+    } catch (e) {
+      console.warn('Failed to delete post', e);
+    }
+  };
+
   const topPosts = [...posts].sort((a, b) => b.reactions - a.reactions).slice(0, 10);
 
   return (
@@ -152,37 +179,52 @@ function App() {
         </div>
 
         <div className="flex justify-center mb-8">
-          <button
-            onClick={() => setShowRecap(!showRecap)}
-            className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-amber-600 to-rose-600 text-white rounded-full font-semibold shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105"
-          >
-            <TrendingUp className="w-5 h-5" />
-            {showRecap ? 'Show All Posts' : 'View Top Posts Recap'}
-          </button>
+          <div className="flex gap-4">
+            <button
+              onClick={() => setShowRecap(!showRecap)}
+              className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-amber-600 to-rose-600 text-white rounded-full font-semibold shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105"
+            >
+              <TrendingUp className="w-5 h-5" />
+              {showRecap ? 'Show All Posts' : 'View Top Posts Recap'}
+            </button>
+            <button
+              onClick={() => setShowAdmin(s => !s)}
+              className="px-4 py-2 bg-gray-800 text-white rounded"
+            >
+              Manage Posts
+            </button>
+          </div>
         </div>
 
         {showRecap ? (
           <TopPostsRecap posts={topPosts} />
         ) : (
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {posts.length === 0 ? (
-              <div className="col-span-full text-center py-16">
-                <Heart className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-                <p className="text-gray-500 text-lg">
-                  No gratitude posts yet. Be the first to share!
-                </p>
+          <>
+            {showAdmin && (
+              <div className="mb-6">
+                <AdminPanel posts={posts} onHideToggle={handleHideToggle} onDelete={handleDelete} />
               </div>
-            ) : (
-              posts.map((post) => (
-                <GratitudeCard
-                  key={post.id}
-                  post={post}
-                  onReact={handleReaction}
-                  hasReacted={userReactions.has(post.id)}
-                />
-              ))
             )}
-          </div>
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {posts.length === 0 ? (
+                <div className="col-span-full text-center py-16">
+                  <Heart className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                  <p className="text-gray-500 text-lg">
+                    No gratitude posts yet. Be the first to share!
+                  </p>
+                </div>
+              ) : (
+                posts.map((post) => (
+                  <GratitudeCard
+                    key={post.id}
+                    post={post}
+                    onReact={handleReaction}
+                    hasReacted={userReactions.has(post.id)}
+                  />
+                ))
+              )}
+            </div>
+          </>
         )}
       </div>
     </div>

@@ -77,4 +77,39 @@ function updateReaction(postId, delta) {
   return false;
 }
 
-module.exports = { readAllPosts, appendPost, updateReaction };
+function updatePost(postId, updates) {
+  const files = listDataFiles();
+  for (const file of files) {
+    const filePath = path.join(DATA_DIR, file);
+    const arr = JSON.parse(fs.readFileSync(filePath, 'utf8') || '[]');
+    let changed = false;
+    const newArr = arr.map(p => {
+      if (p.id === postId) {
+        p = { ...p, ...updates };
+        changed = true;
+      }
+      return p;
+    });
+    if (changed) {
+      fs.writeFileSync(filePath, JSON.stringify(newArr, null, 2));
+      return true;
+    }
+  }
+  return false;
+}
+
+function deletePost(postId) {
+  const files = listDataFiles();
+  for (const file of files) {
+    const filePath = path.join(DATA_DIR, file);
+    const arr = JSON.parse(fs.readFileSync(filePath, 'utf8') || '[]');
+    const newArr = arr.filter(p => p.id !== postId);
+    if (newArr.length !== arr.length) {
+      fs.writeFileSync(filePath, JSON.stringify(newArr, null, 2));
+      return true;
+    }
+  }
+  return false;
+}
+
+module.exports = { readAllPosts, appendPost, updateReaction, updatePost, deletePost };
