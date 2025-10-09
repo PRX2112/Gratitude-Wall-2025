@@ -1,0 +1,3 @@
+This folder stores JSON files created by the server.
+Files are named posts-1.json, posts-2.json, ...
+Each file contains up to 100 posts in newest-first order.

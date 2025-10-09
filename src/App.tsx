@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { io, Socket } from 'socket.io-client';
 import { Heart, Sparkles, TrendingUp } from 'lucide-react';
 import GratitudeForm from './components/GratitudeForm';
 import GratitudeCard from './components/GratitudeCard';
@@ -9,20 +10,52 @@ function App() {
   const [posts, setPosts] = useState<GratitudePost[]>([]);
   const [showRecap, setShowRecap] = useState(false);
   const [userReactions, setUserReactions] = useState<Set<string>>(new Set());
+  const API_BASE = 'http://localhost:4000/api';
+  const SOCKET_URL = 'http://localhost:4000';
 
   useEffect(() => {
-    const savedPosts = localStorage.getItem('gratitudePosts');
-    const savedReactions = localStorage.getItem('userReactions');
+    // Try to fetch from server API first. If it fails, fallback to localStorage.
+    const fetchFromServer = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/posts`);
+        if (!res.ok) throw new Error('server responded ' + res.status);
+        const data: GratitudePost[] = await res.json();
+        setPosts(data);
+        return;
+      } catch (e) {
+        // server not available, fall back
+        const savedPosts = localStorage.getItem('gratitudePosts');
+        if (savedPosts) setPosts(JSON.parse(savedPosts));
+      }
+    };
 
-    if (savedPosts) {
-      setPosts(JSON.parse(savedPosts));
+    const loadReactions = () => {
+      const savedReactions = localStorage.getItem('userReactions');
+      if (savedReactions) setUserReactions(new Set(JSON.parse(savedReactions)));
+    };
+
+    fetchFromServer();
+    loadReactions();
+    // open socket for realtime reactions/posts
+    let socket: Socket | null = null;
+    try {
+      socket = io(SOCKET_URL);
+      socket.on('new_post', (post: GratitudePost) => {
+        setPosts(current => [post, ...current.filter(p => p.id !== post.id)]);
+      });
+      socket.on('reaction_updated', ({ id, reactions }: { id: string; reactions: number }) => {
+        setPosts(current => current.map(p => p.id === id ? { ...p, reactions } : p));
+      });
+    } catch (e) {
+      console.warn('Realtime socket unavailable', e);
     }
-    if (savedReactions) {
-      setUserReactions(new Set(JSON.parse(savedReactions)));
-    }
+
+    return () => {
+      if (socket) socket.disconnect();
+    };
   }, []);
 
-  const handleAddPost = (content: string) => {
+  const handleAddPost = async (content: string) => {
     const newPost: GratitudePost = {
       id: crypto.randomUUID(),
       content,
@@ -30,17 +63,35 @@ function App() {
       reactions: 0
     };
 
+    // optimistic update
     const updatedPosts = [newPost, ...posts];
     setPosts(updatedPosts);
     localStorage.setItem('gratitudePosts', JSON.stringify(updatedPosts));
+
+    // try to persist to server
+    try {
+      const res = await fetch(`${API_BASE}/posts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newPost)
+      });
+      if (!res.ok) {
+        console.warn('Server failed to save post, using localStorage only');
+      }
+    } catch (e) {
+      // server unreachable; keep localStorage as fallback
+      console.warn('Could not reach server, saved locally');
+    }
   };
 
-  const handleReaction = (postId: string) => {
+  const handleReaction = async (postId: string) => {
     const reactionKey = postId;
     const newReactions = new Set(userReactions);
+    let delta = 0;
 
     if (newReactions.has(reactionKey)) {
       newReactions.delete(reactionKey);
+      delta = -1;
       setPosts(posts.map(post =>
         post.id === postId
           ? { ...post, reactions: post.reactions - 1 }
@@ -48,6 +99,7 @@ function App() {
       ));
     } else {
       newReactions.add(reactionKey);
+      delta = 1;
       setPosts(posts.map(post =>
         post.id === postId
           ? { ...post, reactions: post.reactions + 1 }
@@ -57,13 +109,23 @@ function App() {
 
     setUserReactions(newReactions);
     localStorage.setItem('userReactions', JSON.stringify([...newReactions]));
-
-    const updatedPosts = posts.map(post =>
+    localStorage.setItem('gratitudePosts', JSON.stringify(posts.map(post =>
       post.id === postId
-        ? { ...post, reactions: newReactions.has(reactionKey) ? post.reactions + 1 : post.reactions - 1 }
+        ? { ...post, reactions: newReactions.has(reactionKey) ? post.reactions + delta : Math.max(0, post.reactions - delta) }
         : post
-    );
-    localStorage.setItem('gratitudePosts', JSON.stringify(updatedPosts));
+    )));
+
+    // tell server about reaction (best-effort)
+    try {
+      const res = await fetch(`${API_BASE}/posts/${postId}/reaction`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ delta })
+      });
+      if (!res.ok) console.warn('Server failed to record reaction');
+    } catch (e) {
+      console.warn('Could not reach server to record reaction');
+    }
   };
 
   const topPosts = [...posts].sort((a, b) => b.reactions - a.reactions).slice(0, 10);
