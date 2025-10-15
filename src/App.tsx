@@ -16,7 +16,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   const [isPosting, setIsPosting] = useState(false);
-  const [isReacting] = useState<{ [key: string]: boolean }>({});
+  const [isReacting, setIsReacting] = useState<{ [key: string]: boolean }>({});
   const [isAdmin] = useState(false);
   const [hasSubmitted, setHasSubmitted] = useState<boolean>(() => {
     try {
@@ -25,6 +25,22 @@ function App() {
       return false;
     }
   });
+  const [userReactions, setUserReactions] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem('gratitude_likes');
+      if (!raw) return new Set();
+      const arr = JSON.parse(raw);
+      return new Set(Array.isArray(arr) ? arr : []);
+    } catch {
+      return new Set();
+    }
+  });
+
+  const persistLikes = (setVal: Set<string>) => {
+    try {
+      localStorage.setItem('gratitude_likes', JSON.stringify(Array.from(setVal)));
+    } catch {}
+  };
 
   useEffect(() => {
     const fetchPosts = async () => {
@@ -94,8 +110,29 @@ function App() {
   };
 
   const handleReaction = async (postId: string) => {
-    // Reactions disabled in anonymous mode
-    return;
+    if (userReactions.has(postId)) return; // already liked on this device
+
+    try {
+      setIsReacting(current => ({ ...current, [postId]: true }));
+      // Increment reactions via RPC
+      await supabase.rpc('increment_reactions', { post_id: postId });
+
+      // Update local posts state
+      setPosts(current => current.map(p => p.id === postId ? { ...p, reactions: (p.reactions || 0) + 1 } : p));
+
+      // Mark liked locally
+      setUserReactions(current => {
+        const next = new Set(current);
+        next.add(postId);
+        persistLikes(next);
+        return next;
+      });
+    } catch (e) {
+      console.error('Error handling reaction:', e);
+      setError(e as Error);
+    } finally {
+      setIsReacting(current => ({ ...current, [postId]: false }));
+    }
   };
 
   const handleHideToggle = async (postId: string, hide: boolean) => {
@@ -135,7 +172,7 @@ function App() {
     }
   };
 
-  const [userReactions] = useState<Set<string>>(new Set());
+  // userReactions managed via localStorage above
 
   const visiblePosts = posts.filter(post => !post.hidden || isAdmin);
   const topPosts = [...visiblePosts]
@@ -172,9 +209,10 @@ function App() {
           </header>
 
           <div className="mb-8">
-            <GratitudeForm onSubmit={handleAddPost} isLoading={isPosting || hasSubmitted} />
-            {hasSubmitted && (
-              <p className="mt-2 text-sm text-gray-500">Thanks! You already shared your gratitude.</p>
+            {!hasSubmitted ? (
+              <GratitudeForm onSubmit={handleAddPost} isLoading={isPosting} />
+            ) : (
+              <p className="mt-2 text-xl font-bold text-gray-600 text-center">Thanks! You already shared your gratitude.</p>
             )}
           </div>
 
@@ -229,9 +267,9 @@ function App() {
                       key={post.id}
                       post={post}
                       onReact={handleReaction}
-                      hasReacted={false}
-                      isSignedIn={false}
-                      isLoading={false}
+                      hasReacted={userReactions.has(post.id)}
+                      isSignedIn={true}
+                      isLoading={!!isReacting[post.id]}
                     />
                   ))
                 )}

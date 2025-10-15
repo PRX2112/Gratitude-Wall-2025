@@ -45,36 +45,29 @@ export default function GratitudeCard({ post, onReact, hasReacted, isSignedIn = 
           {formatDate((post.created_at as unknown as string) || '')}
         </span>
 
-        {isSignedIn ? (
-          <button
-            onClick={() => !isLoading && onReact(post.id)}
-            disabled={isLoading}
-            className={`flex items-center gap-2 px-4 py-2 rounded-full font-medium transition-all duration-300 ${
-              hasReacted
-                ? 'bg-rose-500 text-white shadow-md hover:shadow-lg scale-105'
-                : 'bg-gray-100 text-gray-600 hover:bg-rose-100 hover:text-rose-600'
-            } ${isLoading ? 'opacity-75 cursor-not-allowed' : 'hover:scale-110'} animate-pop`}
-            title={hasReacted ? "Remove reaction" : "React to this post"}
-          >
-            {isLoading ? (
-              <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-            ) : (
-              <Heart
-                className={`w-4 h-4 transition-all duration-300 ${
-                  hasReacted ? 'fill-white animate-heart-beat' : ''
-                }`}
-              />
-            )}
-            <span className="font-semibold transition-all duration-300 animate-bounce">
-              {post.reactions}
-            </span>
-          </button>
-        ) : (
-          <div className="flex items-center gap-2 px-4 py-2 bg-gray-100 rounded-full text-gray-500">
-            <Heart className="w-4 h-4" />
-            <span className="font-semibold">{post.reactions}</span>
-          </div>
-        )}
+        <button
+          onClick={() => !isLoading && onReact(post.id)}
+          disabled={isLoading || hasReacted}
+          className={`flex items-center gap-2 px-4 py-2 rounded-full font-medium transition-all duration-300 ${
+            hasReacted
+              ? 'bg-rose-500 text-white shadow-md scale-105'
+              : 'bg-gray-100 text-gray-600 hover:bg-rose-100 hover:text-rose-600'
+          } ${isLoading ? 'opacity-75 cursor-not-allowed' : 'hover:scale-110'} animate-pop`}
+          title={hasReacted ? "You liked this" : "Like this post"}
+        >
+          {isLoading ? (
+            <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+          ) : (
+            <Heart
+              className={`w-4 h-4 transition-all duration-300 ${
+                hasReacted ? 'fill-white animate-heart-beat' : ''
+              }`}
+            />
+          )}
+          <span className="font-semibold transition-all duration-300 animate-bounce">
+            {post.reactions}
+          </span>
+        </button>
       </div>
       <style>{`
         .animate-fade-in {
