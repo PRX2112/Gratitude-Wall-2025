@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Loader2, Heart, Sparkles, TrendingUp } from 'lucide-react';
 import { supabase } from './lib/supabase';
-import { useAuth } from './components/AuthProvider';
 import GratitudeForm from './components/GratitudeForm';
 import GratitudeCard from './components/GratitudeCard';
 import TopPostsRecap from './components/TopPostsRecap';
@@ -10,15 +9,22 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { GratitudePost } from './types';
 
 function App() {
-
-  const { user, isAdmin } = useAuth();
+  // Anonymous mode: no auth
   const [posts, setPosts] = useState<GratitudePost[]>([]);
   const [showRecap, setShowRecap] = useState(false);
   const [showAdmin, setShowAdmin] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   const [isPosting, setIsPosting] = useState(false);
-  const [isReacting, setIsReacting] = useState<{ [key: string]: boolean }>({});
+  const [isReacting] = useState<{ [key: string]: boolean }>({});
+  const [isAdmin] = useState(false);
+  const [hasSubmitted, setHasSubmitted] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('gratitude_submitted') === '1';
+    } catch {
+      return false;
+    }
+  });
 
   useEffect(() => {
     const fetchPosts = async () => {
@@ -65,18 +71,20 @@ function App() {
   }, [supabase]);
 
   const handleAddPost = async (content: string) => {
-    if (!user) return;
+    if (hasSubmitted) return;
     
     try {
       setIsPosting(true);
       const { data, error } = await supabase
         .from('posts')
-        .insert([{ content, user_id: user.id, reactions: 0 }])
+        .insert([{ content, reactions: 0 }])
         .select()
         .single();
 
       if (error) throw error;
       setPosts(current => [data, ...current]);
+      try { localStorage.setItem('gratitude_submitted', '1'); } catch {}
+      setHasSubmitted(true);
     } catch (e) {
       console.error('Error adding post:', e);
       setError(e as Error);
@@ -86,59 +94,8 @@ function App() {
   };
 
   const handleReaction = async (postId: string) => {
-    if (!user) return;
-
-    try {
-      setIsReacting(current => ({ ...current, [postId]: true }));
-
-      const { data: existingReaction } = await supabase
-        .from('post_reactions')
-        .select()
-        .eq('post_id', postId)
-        .eq('user_id', user.id)
-        .single();
-
-      if (existingReaction) {
-        // Remove reaction
-        await supabase
-          .from('post_reactions')
-          .delete()
-          .eq('post_id', postId)
-          .eq('user_id', user.id);
-
-        // Update post reaction count
-        await supabase
-          .rpc('decrement_reactions', { post_id: postId });
-
-        // Update local state
-        setUserReactions(current => {
-          const newSet = new Set(current);
-          newSet.delete(postId);
-          return newSet;
-        });
-      } else {
-        // Add reaction
-        await supabase
-          .from('post_reactions')
-          .insert([{ post_id: postId, user_id: user.id }]);
-
-        // Update post reaction count
-        await supabase
-          .rpc('increment_reactions', { post_id: postId });
-
-        // Update local state
-        setUserReactions(current => {
-          const newSet = new Set(current);
-          newSet.add(postId);
-          return newSet;
-        });
-      }
-    } catch (e) {
-      console.error('Error handling reaction:', e);
-      setError(e as Error);
-    } finally {
-      setIsReacting(current => ({ ...current, [postId]: false }));
-    }
+    // Reactions disabled in anonymous mode
+    return;
   };
 
   const handleHideToggle = async (postId: string, hide: boolean) => {
@@ -178,25 +135,7 @@ function App() {
     }
   };
 
-  const [userReactions, setUserReactions] = useState<Set<string>>(new Set());
-
-  // Fetch user's reactions
-  useEffect(() => {
-    if (!user) return;
-
-    const fetchUserReactions = async () => {
-      const { data } = await supabase
-        .from('post_reactions')
-        .select('post_id')
-        .eq('user_id', user.id);
-
-      if (data) {
-        setUserReactions(new Set(data.map((r: { post_id: string }) => r.post_id)));
-      }
-    };
-
-    fetchUserReactions();
-  }, [user, supabase]);
+  const [userReactions] = useState<Set<string>>(new Set());
 
   const visiblePosts = posts.filter(post => !post.hidden || isAdmin);
   const topPosts = [...visiblePosts]
@@ -232,20 +171,12 @@ function App() {
             </p>
           </header>
 
-          {user ? (
-            <div className="mb-8">
-              <GratitudeForm onSubmit={handleAddPost} isLoading={isPosting} />
-            </div>
-          ) : (
-            <div className="text-center mb-8">
-              <button
-                onClick={() => signIn()}
-                className="inline-flex items-center px-6 py-3 bg-gray-900 text-white rounded-lg font-semibold shadow-lg hover:bg-gray-800 transition"
-              >
-                Sign in with GitHub to share gratitude
-              </button>
-            </div>
-          )}
+          <div className="mb-8">
+            <GratitudeForm onSubmit={handleAddPost} isLoading={isPosting || hasSubmitted} />
+            {hasSubmitted && (
+              <p className="mt-2 text-sm text-gray-500">Thanks! You already shared your gratitude.</p>
+            )}
+          </div>
 
           <div className="flex justify-center mb-8">
             <div className="flex gap-4">
@@ -298,9 +229,9 @@ function App() {
                       key={post.id}
                       post={post}
                       onReact={handleReaction}
-                      hasReacted={userReactions.has(post.id)}
-                      isSignedIn={!!user}
-                      isLoading={isReacting[post.id]}
+                      hasReacted={false}
+                      isSignedIn={false}
+                      isLoading={false}
                     />
                   ))
                 )}
