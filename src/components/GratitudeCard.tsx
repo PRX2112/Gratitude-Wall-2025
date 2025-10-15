@@ -5,9 +5,11 @@ interface GratitudeCardProps {
   post: GratitudePost;
   onReact: (postId: string) => void;
   hasReacted: boolean;
+  isSignedIn?: boolean;
+  isLoading?: boolean;
 }
 
-export default function GratitudeCard({ post, onReact, hasReacted }: GratitudeCardProps) {
+export default function GratitudeCard({ post, onReact, hasReacted, isSignedIn = true, isLoading = false }: GratitudeCardProps) {
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     const now = new Date();
@@ -40,26 +42,39 @@ export default function GratitudeCard({ post, onReact, hasReacted }: GratitudeCa
         <span
           className="text-sm text-gray-500 transition-colors duration-300 group-hover:text-amber-600 animate-fade-in"
         >
-          {formatDate(post.createdAt)}
+          {formatDate((post.created_at as unknown as string) || '')}
         </span>
 
-        <button
-          onClick={() => onReact(post.id)}
-          className={`flex items-center gap-2 px-4 py-2 rounded-full font-medium transition-all duration-300 ${
-            hasReacted
-              ? 'bg-rose-500 text-white shadow-md hover:shadow-lg scale-105'
-              : 'bg-gray-100 text-gray-600 hover:bg-rose-100 hover:text-rose-600'
-          } hover:scale-110 animate-pop`}
-        >
-          <Heart
-            className={`w-4 h-4 transition-all duration-300 ${
-              hasReacted ? 'fill-white animate-heart-beat' : ''
-            }`}
-          />
-          <span className="font-semibold transition-all duration-300 animate-bounce">
-            {post.reactions}
-          </span>
-        </button>
+        {isSignedIn ? (
+          <button
+            onClick={() => !isLoading && onReact(post.id)}
+            disabled={isLoading}
+            className={`flex items-center gap-2 px-4 py-2 rounded-full font-medium transition-all duration-300 ${
+              hasReacted
+                ? 'bg-rose-500 text-white shadow-md hover:shadow-lg scale-105'
+                : 'bg-gray-100 text-gray-600 hover:bg-rose-100 hover:text-rose-600'
+            } ${isLoading ? 'opacity-75 cursor-not-allowed' : 'hover:scale-110'} animate-pop`}
+            title={hasReacted ? "Remove reaction" : "React to this post"}
+          >
+            {isLoading ? (
+              <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <Heart
+                className={`w-4 h-4 transition-all duration-300 ${
+                  hasReacted ? 'fill-white animate-heart-beat' : ''
+                }`}
+              />
+            )}
+            <span className="font-semibold transition-all duration-300 animate-bounce">
+              {post.reactions}
+            </span>
+          </button>
+        ) : (
+          <div className="flex items-center gap-2 px-4 py-2 bg-gray-100 rounded-full text-gray-500">
+            <Heart className="w-4 h-4" />
+            <span className="font-semibold">{post.reactions}</span>
+          </div>
+        )}
       </div>
       <style>{`
         .animate-fade-in {

@@ -1,233 +1,315 @@
 import { useState, useEffect } from 'react';
-import { io, Socket } from 'socket.io-client';
-import { Heart, Sparkles, TrendingUp } from 'lucide-react';
+import { Loader2, Heart, Sparkles, TrendingUp } from 'lucide-react';
+import { supabase } from './lib/supabase';
+import { useAuth } from './components/AuthProvider';
 import GratitudeForm from './components/GratitudeForm';
 import GratitudeCard from './components/GratitudeCard';
 import TopPostsRecap from './components/TopPostsRecap';
 import AdminPanel from './components/AdminPanel';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { GratitudePost } from './types';
 
 function App() {
+
+  const { user, isAdmin } = useAuth();
   const [posts, setPosts] = useState<GratitudePost[]>([]);
   const [showRecap, setShowRecap] = useState(false);
-  const [userReactions, setUserReactions] = useState<Set<string>>(new Set());
-  const API_BASE = 'http://localhost:4000/api';
-  const SOCKET_URL = 'http://localhost:4000';
   const [showAdmin, setShowAdmin] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+  const [isPosting, setIsPosting] = useState(false);
+  const [isReacting, setIsReacting] = useState<{ [key: string]: boolean }>({});
 
   useEffect(() => {
-    // Try to fetch from server API first. If it fails, fallback to localStorage.
-    const fetchFromServer = async () => {
+    const fetchPosts = async () => {
       try {
-        const res = await fetch(`${API_BASE}/posts`);
-        if (!res.ok) throw new Error('server responded ' + res.status);
-        const data: GratitudePost[] = await res.json();
-        setPosts(data);
-        return;
+        setIsLoading(true);
+        const { data, error } = await supabase
+          .from('posts')
+          .select('*')
+          .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        setPosts(data || []);
       } catch (e) {
-        // server not available, fall back
-        const savedPosts = localStorage.getItem('gratitudePosts');
-        if (savedPosts) setPosts(JSON.parse(savedPosts));
+        console.error('Error fetching posts:', e);
+        setError(e as Error);
+      } finally {
+        setIsLoading(false);
       }
     };
 
-    const loadReactions = () => {
-      const savedReactions = localStorage.getItem('userReactions');
-      if (savedReactions) setUserReactions(new Set(JSON.parse(savedReactions)));
-    };
+    // Subscribe to realtime changes
+    const subscription = supabase
+      .channel('public:posts')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'posts' }, 
+        payload => {
+          if (payload.eventType === 'INSERT') {
+            setPosts(current => [payload.new as GratitudePost, ...current]);
+          } else if (payload.eventType === 'UPDATE') {
+            setPosts(current => current.map(post => 
+              post.id === payload.new.id ? payload.new as GratitudePost : post
+            ));
+          } else if (payload.eventType === 'DELETE') {
+            setPosts(current => current.filter(post => post.id !== payload.old.id));
+          }
+        }
+      )
+      .subscribe();
 
-    fetchFromServer();
-    loadReactions();
-    // open socket for realtime reactions/posts
-    let socket: Socket | null = null;
-    try {
-      socket = io(SOCKET_URL);
-      socket.on('new_post', (post: GratitudePost) => {
-        setPosts(current => [post, ...current.filter(p => p.id !== post.id)]);
-      });
-      socket.on('reaction_updated', ({ id, reactions }: { id: string; reactions: number }) => {
-        setPosts(current => current.map(p => p.id === id ? { ...p, reactions } : p));
-      });
-    } catch (e) {
-      console.warn('Realtime socket unavailable', e);
-    }
+    fetchPosts();
 
     return () => {
-      if (socket) socket.disconnect();
+      subscription.unsubscribe();
     };
-  }, []);
+  }, [supabase]);
 
   const handleAddPost = async (content: string) => {
-    const newPost: GratitudePost = {
-      id: crypto.randomUUID(),
-      content,
-      createdAt: new Date().toISOString(),
-      reactions: 0
-    };
-
-    // optimistic update
-    const updatedPosts = [newPost, ...posts];
-    setPosts(updatedPosts);
-    localStorage.setItem('gratitudePosts', JSON.stringify(updatedPosts));
-
-    // try to persist to server
+    if (!user) return;
+    
     try {
-      const res = await fetch(`${API_BASE}/posts`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newPost)
-      });
-      if (!res.ok) {
-        console.warn('Server failed to save post, using localStorage only');
-      }
+      setIsPosting(true);
+      const { data, error } = await supabase
+        .from('posts')
+        .insert([{ content, user_id: user.id, reactions: 0 }])
+        .select()
+        .single();
+
+      if (error) throw error;
+      setPosts(current => [data, ...current]);
     } catch (e) {
-      // server unreachable; keep localStorage as fallback
-      console.warn('Could not reach server, saved locally');
+      console.error('Error adding post:', e);
+      setError(e as Error);
+    } finally {
+      setIsPosting(false);
     }
   };
 
   const handleReaction = async (postId: string) => {
-    const reactionKey = postId;
-    const newReactions = new Set(userReactions);
-    let delta = 0;
+    if (!user) return;
 
-    if (newReactions.has(reactionKey)) {
-      newReactions.delete(reactionKey);
-      delta = -1;
-      setPosts(posts.map(post =>
-        post.id === postId
-          ? { ...post, reactions: post.reactions - 1 }
-          : post
-      ));
-    } else {
-      newReactions.add(reactionKey);
-      delta = 1;
-      setPosts(posts.map(post =>
-        post.id === postId
-          ? { ...post, reactions: post.reactions + 1 }
-          : post
-      ));
-    }
-
-    setUserReactions(newReactions);
-    localStorage.setItem('userReactions', JSON.stringify([...newReactions]));
-    localStorage.setItem('gratitudePosts', JSON.stringify(posts.map(post =>
-      post.id === postId
-        ? { ...post, reactions: newReactions.has(reactionKey) ? post.reactions + delta : Math.max(0, post.reactions - delta) }
-        : post
-    )));
-
-    // tell server about reaction (best-effort)
     try {
-      const res = await fetch(`${API_BASE}/posts/${postId}/reaction`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ delta })
-      });
-      if (!res.ok) console.warn('Server failed to record reaction');
+      setIsReacting(current => ({ ...current, [postId]: true }));
+
+      const { data: existingReaction } = await supabase
+        .from('post_reactions')
+        .select()
+        .eq('post_id', postId)
+        .eq('user_id', user.id)
+        .single();
+
+      if (existingReaction) {
+        // Remove reaction
+        await supabase
+          .from('post_reactions')
+          .delete()
+          .eq('post_id', postId)
+          .eq('user_id', user.id);
+
+        // Update post reaction count
+        await supabase
+          .rpc('decrement_reactions', { post_id: postId });
+
+        // Update local state
+        setUserReactions(current => {
+          const newSet = new Set(current);
+          newSet.delete(postId);
+          return newSet;
+        });
+      } else {
+        // Add reaction
+        await supabase
+          .from('post_reactions')
+          .insert([{ post_id: postId, user_id: user.id }]);
+
+        // Update post reaction count
+        await supabase
+          .rpc('increment_reactions', { post_id: postId });
+
+        // Update local state
+        setUserReactions(current => {
+          const newSet = new Set(current);
+          newSet.add(postId);
+          return newSet;
+        });
+      }
     } catch (e) {
-      console.warn('Could not reach server to record reaction');
+      console.error('Error handling reaction:', e);
+      setError(e as Error);
+    } finally {
+      setIsReacting(current => ({ ...current, [postId]: false }));
     }
   };
 
   const handleHideToggle = async (postId: string, hide: boolean) => {
+    if (!isAdmin) return;
+
     try {
-      const res = await fetch(`${API_BASE}/posts/${postId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hidden: hide })
-      });
-      if (!res.ok) throw new Error('failed');
-      const data = await res.json();
-      setPosts(current => current.map(p => p.id === postId ? { ...p, hidden: data.post.hidden } : p));
+      const { error } = await supabase
+        .from('posts')
+        .update({ hidden: hide })
+        .eq('id', postId);
+
+      if (error) throw error;
+      
+      // Update local state
+      setPosts(current => current.map(post => 
+        post.id === postId ? { ...post, hidden: hide } : post
+      ));
     } catch (e) {
-      console.warn('Failed to toggle hide', e);
+      console.error('Error toggling post visibility:', e);
+      setError(e as Error);
     }
   };
 
   const handleDelete = async (postId: string) => {
+    if (!isAdmin) return;
+
     try {
-      const res = await fetch(`${API_BASE}/posts/${postId}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('delete failed');
-      setPosts(current => current.filter(p => p.id !== postId));
+      const { error } = await supabase
+        .from('posts')
+        .delete()
+        .eq('id', postId);
+
+      if (error) throw error;
     } catch (e) {
-      console.warn('Failed to delete post', e);
+      console.error('Error deleting post:', e);
+      setError(e as Error);
     }
   };
 
-  const topPosts = [...posts].sort((a, b) => b.reactions - a.reactions).slice(0, 10);
+  const [userReactions, setUserReactions] = useState<Set<string>>(new Set());
+
+  // Fetch user's reactions
+  useEffect(() => {
+    if (!user) return;
+
+    const fetchUserReactions = async () => {
+      const { data } = await supabase
+        .from('post_reactions')
+        .select('post_id')
+        .eq('user_id', user.id);
+
+      if (data) {
+        setUserReactions(new Set(data.map((r: { post_id: string }) => r.post_id)));
+      }
+    };
+
+    fetchUserReactions();
+  }, [user, supabase]);
+
+  const visiblePosts = posts.filter(post => !post.hidden || isAdmin);
+  const topPosts = [...visiblePosts]
+    .sort((a, b) => b.reactions - a.reactions)
+    .slice(0, 10);
+
+  if (error) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-red-50">
+        <div className="text-center p-8">
+          <h1 className="text-2xl font-bold text-red-600 mb-4">Error</h1>
+          <p className="text-gray-700">{error.message}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-amber-50 via-rose-50 to-blue-50">
-      <div className="max-w-6xl mx-auto px-4 py-8">
-        <header className="text-center mb-12">
-          <div className="flex items-center justify-center gap-3 mb-4">
-            <Sparkles className="w-10 h-10 text-amber-600" />
-            <h1 className="text-5xl font-bold bg-gradient-to-r from-amber-600 via-rose-600 to-blue-600 bg-clip-text text-transparent">
-              Gratitude Wall 2025
-            </h1>
-            <Sparkles className="w-10 h-10 text-blue-600" />
-          </div>
-          <p className="text-lg text-gray-700 max-w-2xl mx-auto">
-            Share your anonymous thank-yous to anyone or anything that helped you in 2025.
-            Your gratitude matters.
-          </p>
-        </header>
+    <ErrorBoundary>
+      <div className="min-h-screen bg-gradient-to-br from-amber-50 via-rose-50 to-blue-50">
+        <div className="max-w-6xl mx-auto px-4 py-8">
+          <header className="text-center mb-12">
+            <div className="flex items-center justify-center gap-3 mb-4">
+              <Sparkles className="w-10 h-10 text-amber-600" />
+              <h1 className="text-5xl font-bold bg-gradient-to-r from-amber-600 via-rose-600 to-blue-600 bg-clip-text text-transparent">
+                Gratitude Wall 2025
+              </h1>
+              <Sparkles className="w-10 h-10 text-blue-600" />
+            </div>
+            <p className="text-lg text-gray-700 max-w-2xl mx-auto">
+              Share your thank-yous to anyone or anything that helped you in 2025.
+              Your gratitude matters.
+            </p>
+          </header>
 
-        <div className="mb-8">
-          <GratitudeForm onSubmit={handleAddPost} />
-        </div>
+          {user ? (
+            <div className="mb-8">
+              <GratitudeForm onSubmit={handleAddPost} isLoading={isPosting} />
+            </div>
+          ) : (
+            <div className="text-center mb-8">
+              <button
+                onClick={() => signIn()}
+                className="inline-flex items-center px-6 py-3 bg-gray-900 text-white rounded-lg font-semibold shadow-lg hover:bg-gray-800 transition"
+              >
+                Sign in with GitHub to share gratitude
+              </button>
+            </div>
+          )}
 
-        <div className="flex justify-center mb-8">
-          <div className="flex gap-4">
-            <button
-              onClick={() => setShowRecap(!showRecap)}
-              className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-amber-600 to-rose-600 text-white rounded-full font-semibold shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105"
-            >
-              <TrendingUp className="w-5 h-5" />
-              {showRecap ? 'Show All Posts' : 'View Top Posts Recap'}
-            </button>
-            <button
-              onClick={() => setShowAdmin(s => !s)}
-              className="px-4 py-2 bg-gray-800 text-white rounded"
-            >
-              Manage Posts
-            </button>
-          </div>
-        </div>
-
-        {showRecap ? (
-          <TopPostsRecap posts={topPosts} />
-        ) : (
-          <>
-            {showAdmin && (
-              <div className="mb-6">
-                <AdminPanel posts={posts} onHideToggle={handleHideToggle} onDelete={handleDelete} />
-              </div>
-            )}
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {posts.length === 0 ? (
-                <div className="col-span-full text-center py-16">
-                  <Heart className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-                  <p className="text-gray-500 text-lg">
-                    No gratitude posts yet. Be the first to share!
-                  </p>
-                </div>
-              ) : (
-                posts.map((post) => (
-                  <GratitudeCard
-                    key={post.id}
-                    post={post}
-                    onReact={handleReaction}
-                    hasReacted={userReactions.has(post.id)}
-                  />
-                ))
+          <div className="flex justify-center mb-8">
+            <div className="flex gap-4">
+              <button
+                onClick={() => setShowRecap(!showRecap)}
+                className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-amber-600 to-rose-600 text-white rounded-full font-semibold shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105"
+              >
+                <TrendingUp className="w-5 h-5" />
+                {showRecap ? 'Show All Posts' : 'View Top Posts Recap'}
+              </button>
+              {isAdmin && (
+                <button
+                  onClick={() => setShowAdmin(s => !s)}
+                  className="px-4 py-2 bg-gray-800 text-white rounded"
+                >
+                  Manage Posts
+                </button>
               )}
             </div>
-          </>
-        )}
+          </div>
+
+          {isLoading ? (
+            <div className="flex justify-center py-12">
+              <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+            </div>
+          ) : showRecap ? (
+            <TopPostsRecap posts={topPosts} />
+          ) : (
+            <>
+              {showAdmin && isAdmin && (
+                <div className="mb-6">
+                  <AdminPanel 
+                    posts={posts} 
+                    onHideToggle={handleHideToggle} 
+                    onDelete={handleDelete} 
+                  />
+                </div>
+              )}
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {visiblePosts.length === 0 ? (
+                  <div className="col-span-full text-center py-16">
+                    <Heart className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                    <p className="text-gray-500 text-lg">
+                      No gratitude posts yet. Be the first to share!
+                    </p>
+                  </div>
+                ) : (
+                  visiblePosts.map((post) => (
+                    <GratitudeCard
+                      key={post.id}
+                      post={post}
+                      onReact={handleReaction}
+                      hasReacted={userReactions.has(post.id)}
+                      isSignedIn={!!user}
+                      isLoading={isReacting[post.id]}
+                    />
+                  ))
+                )}
+              </div>
+            </>
+          )}
+        </div>
       </div>
-    </div>
+    </ErrorBoundary>
   );
 }
 

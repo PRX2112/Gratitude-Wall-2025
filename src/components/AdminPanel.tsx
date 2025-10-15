@@ -18,7 +18,7 @@ export default function AdminPanel({ posts, onHideToggle, onDelete }: Props) {
             <div key={p.id} className="flex items-start justify-between gap-4 p-3 border rounded">
               <div className="flex-1">
                 <p className="text-sm text-gray-700">{p.content}</p>
-                <p className="text-xs text-gray-400">{new Date(p.createdAt).toLocaleString()}</p>
+                <p className="text-xs text-gray-400">{new Date(p.created_at as unknown as string).toLocaleString()}</p>
                 <p className="text-xs text-gray-500">Reactions: {p.reactions || 0}</p>
               </div>
               <div className="flex-shrink-0 flex gap-2">
